@@ -1,0 +1,15 @@
+rules:
+  - id: liability_cap_minimum
+    when:
+      clause.type: limitation_of_liability
+      clause.normalized.cap_ratio_to_annual_fees: "< 1.0"
+    then:
+      severity: high
+      message: "Liability cap is below annual fees."
+  - id: auto_renew_notice
+    when:
+      clause.type: renewal
+      clause.normalized.notice_days: "< 30"
+    then:
+      severity: medium
+      message: "Notice window under 30 days may be risky."
