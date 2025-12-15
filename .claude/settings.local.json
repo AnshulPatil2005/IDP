@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git clean:*)",
+      "Bash(del nul)",
+      "Bash(rm:*)"
+    ]
+  }
+}

@@ -22,3 +22,11 @@ def get_json(key: str) -> dict | None:
 
 def put_bytes(key: str, b: bytes, content_type: str = "application/octet-stream"):
     _s3.put_object(Bucket=_BUCKET, Key=key, Body=b, ContentType=content_type)
+
+def get_bytes(key: str) -> bytes | None:
+    """Fetch raw bytes from storage."""
+    try:
+        obj = _s3.get_object(Bucket=_BUCKET, Key=key)
+        return obj["Body"].read()
+    except _s3.exceptions.NoSuchKey:
+        return None
