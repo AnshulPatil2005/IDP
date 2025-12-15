@@ -19,25 +19,11 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:
-      test: ["CMD", "wget", "-q", "http://localhost:6333/readyz", "-O", "-"]
+      test: ["CMD-SHELL", "timeout 10s bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 30
     restart: unless-stopped
-  ollama:
-    image: ollama/ollama:latest
-    ports: ["11434:11434"]
-    volumes:
-      - ollama:/root/.ollama
-    healthcheck:
-      # Use the built-in CLI; it returns non-zero until the API is ready
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-    restart: unless-stopped
-
   api:
     image: python:3.11-slim
     working_dir: /app
@@ -47,18 +33,19 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP: "true"
-      LLM_PROVIDER: ollama
-      LLM_MODEL: llama3:8b
-      OLLAMA_BASE: http://ollama:11434
+      LLM_PROVIDER: openrouter
+      LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       PYTHONPATH: /app
     command: >
-      bash -lc "pip install -r requirements.txt &&
+      bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
+                pip install -r requirements.txt &&
                 uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports: ["8000:8000"]
     depends_on:
       redis:
         condition: service_healthy
-      ollama:
+      qdrant:
         condition: service_healthy
     restart: unless-stopped
 
@@ -72,22 +59,32 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP: "true"
-      LLM_PROVIDER: ollama
-      LLM_MODEL: llama3:8b
-      OLLAMA_BASE: http://ollama:11434
+      LLM_PROVIDER: openrouter
+      LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
     command: >
-      bash -lc "pip install -r requirements.txt &&
+      bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
+                pip install -r requirements.txt &&
                 celery -A app.workers.celery_app:celery worker -l info"
     depends_on:
       redis:
         condition: service_healthy
-      ollama:
+      qdrant:
         condition: service_healthy
       api:
         condition: service_started
     restart: unless-stopped
 
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
-  ollama: {}
   qdrant_storage:
     driver: local

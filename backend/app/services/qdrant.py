@@ -7,9 +7,10 @@ from sentence_transformers import SentenceTransformer
 
 _qdrant = QdrantClient(url=os.getenv("QDRANT_URL", "http://qdrant:6333"))
 _COL = "spans"
-_model = SentenceTransformer("all-MiniLM-L6-v2")
+# Using all-mpnet-base-v2: Better quality, Apache 2.0 license, 768 dimensions
+_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
 
-def ensure_collection(dim: int = 384) -> None:
+def ensure_collection(dim: int = 768) -> None:
     cols = {c.name for c in _qdrant.get_collections().collections}
     if _COL not in cols:
         _qdrant.create_collection(_COL, vectors_config=VectorParams(size=dim, distance=Distance.COSINE))
