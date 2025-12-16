@@ -24,6 +24,24 @@ services:
       timeout: 3s
       retries: 30
     restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_storage:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
   api:
     image: python:3.11-slim
     working_dir: /app
@@ -37,6 +55,10 @@ services:
       LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       PYTHONPATH: /app
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: docs
     command: >
       bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
                 pip install -r requirements.txt &&
@@ -46,6 +68,8 @@ services:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     restart: unless-stopped
 
@@ -62,6 +86,10 @@ services:
       LLM_PROVIDER: openrouter
       LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: docs
     command: >
       bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
                 pip install -r requirements.txt &&
@@ -70,6 +98,8 @@ services:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      minio:
         condition: service_healthy
       api:
         condition: service_started
@@ -87,4 +117,6 @@ services:
 
 volumes:
   qdrant_storage:
+    driver: local
+  minio_storage:
     driver: local
