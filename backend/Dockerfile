@@ -3,8 +3,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies if needed (uncomment if you need build tools)
-# RUN apt-get update && apt-get install -y build-essential
+# System deps required by OCR/vision libs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file first for caching
 COPY requirements.txt ./

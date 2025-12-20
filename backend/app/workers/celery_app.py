@@ -27,3 +27,7 @@ celery.conf.update(
     worker_prefetch_multiplier=1,
     result_expires=3600,
 )
+
+# Import tasks to register them with the Celery worker
+# This ensures the worker knows about all the task definitions
+from ..services import pipeline  # noqa: E402, F401

@@ -8,7 +8,7 @@ _s3 = boto3.client(
     aws_secret_access_key=os.getenv("MINIO_SECRET_KEY"),
     config=Config(signature_version="s3v4"),
 )
-_BUCKET = os.getenv("MINIO_BUCKET", "titan")
+_BUCKET = os.getenv("MINIO_BUCKET", "docs")
 
 def put_json(key: str, data: dict):
     _s3.put_object(Bucket=_BUCKET, Key=key, Body=json.dumps(data).encode("utf-8"), ContentType="application/json")

@@ -7,7 +7,7 @@ from ..schemas.ask import AskRequest, AskAnswer
 from ..schemas.common import TextSpan
 from ..services import rag
 
-router = APIRouter(prefix="/", tags=["ask"])
+router = APIRouter(prefix="", tags=["ask"])
 
 # Helper: sync/async tolerant
 async def _maybe_await(

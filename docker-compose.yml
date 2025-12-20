@@ -24,8 +24,29 @@ services:
       timeout: 3s
       retries: 30
     restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # Console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_storage:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
   api:
-    image: python:3.11-slim
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: idp-backend:dev
     working_dir: /app
     volumes: ["./backend:/app", "./configs:/configs"]
     environment:
@@ -37,20 +58,24 @@ services:
       LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       PYTHONPATH: /app
-    command: >
-      bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
-                pip install -r requirements.txt &&
-                uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-docs}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports: ["8000:8000"]
     depends_on:
       redis:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
-    image: python:3.11-slim
+    image: idp-backend:dev
     working_dir: /app
     volumes: ["./backend:/app", "./configs:/configs"]
     environment:
@@ -62,14 +87,18 @@ services:
       LLM_PROVIDER: openrouter
       LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-    command: >
-      bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
-                pip install -r requirements.txt &&
-                celery -A app.workers.celery_app:celery worker -l info"
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-docs}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+    command: ["celery", "-A", "app.workers.celery_app:celery", "worker", "-l", "info"]
     depends_on:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      minio:
         condition: service_healthy
       api:
         condition: service_started
@@ -87,4 +116,6 @@ services:
 
 volumes:
   qdrant_storage:
+    driver: local
+  minio_storage:
     driver: local
