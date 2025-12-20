@@ -3,6 +3,7 @@ from botocore.client import Config
 
 _endpoint = os.getenv("MINIO_ENDPOINT")
 _secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
+# MinIO client expects host:port, but boto3 requires scheme (http:// or https://)
 if _endpoint and not _endpoint.startswith("http"):
     _endpoint = f"{'https' if _secure else 'http'}://{_endpoint}"
 
