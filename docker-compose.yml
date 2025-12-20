@@ -32,8 +32,8 @@ services:
       - "9000:9000"   # API
       - "9001:9001"   # Console
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - minio_storage:/data
     healthcheck:
@@ -43,7 +43,10 @@ services:
       retries: 30
     restart: unless-stopped
   api:
-    image: python:3.11-slim
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: idp-backend:dev
     working_dir: /app
     volumes: ["./backend:/app", "./configs:/configs"]
     environment:
@@ -55,14 +58,12 @@ services:
       LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       PYTHONPATH: /app
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-      MINIO_BUCKET: docs
-    command: >
-      bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
-                pip install -r requirements.txt &&
-                uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-docs}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports: ["8000:8000"]
     depends_on:
       redis:
@@ -74,7 +75,7 @@ services:
     restart: unless-stopped
 
   worker:
-    image: python:3.11-slim
+    image: idp-backend:dev
     working_dir: /app
     volumes: ["./backend:/app", "./configs:/configs"]
     environment:
@@ -86,14 +87,12 @@ services:
       LLM_PROVIDER: openrouter
       LLM_MODEL: deepseek/deepseek-chat-v3-0324:free
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-      MINIO_BUCKET: docs
-    command: >
-      bash -lc "apt-get update && apt-get install -y libgl1 libglib2.0-0 &&
-                pip install -r requirements.txt &&
-                celery -A app.workers.celery_app:celery worker -l info"
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-docs}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+    command: ["celery", "-A", "app.workers.celery_app:celery", "worker", "-l", "info"]
     depends_on:
       redis:
         condition: service_healthy
