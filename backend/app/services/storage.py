@@ -1,9 +1,14 @@
 import os, io, json, boto3
 from botocore.client import Config
 
+_endpoint = os.getenv("MINIO_ENDPOINT")
+_secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
+if _endpoint and not _endpoint.startswith("http"):
+    _endpoint = f"{'https' if _secure else 'http'}://{_endpoint}"
+
 _s3 = boto3.client(
     "s3",
-    endpoint_url=os.getenv("MINIO_ENDPOINT"),
+    endpoint_url=_endpoint,
     aws_access_key_id=os.getenv("MINIO_ACCESS_KEY"),
     aws_secret_access_key=os.getenv("MINIO_SECRET_KEY"),
     config=Config(signature_version="s3v4"),
