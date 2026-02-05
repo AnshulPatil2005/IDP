@@ -26,15 +26,19 @@ def upsert_spans(doc_id: str, spans: List[Dict[str, Any]]) -> None:
     if not spans:
         return
 
-    vectors = embed([s["text"] for s in spans])
-    ids = [_stable_id(doc_id, i) for i in range(len(spans))]
-    payloads = [{"doc_id": doc_id, **s} for s in spans]
+    # Batch processing to avoid memory issues and timeouts with many spans
+    batch_size = 100
+    for i in range(0, len(spans), batch_size):
+        batch = spans[i : i + batch_size]
+        vectors = embed([s["text"] for s in batch])
+        ids = [_stable_id(doc_id, i + j) for j in range(len(batch))]
+        payloads = [{"doc_id": doc_id, **s} for s in batch]
 
-    _qdrant.upsert(
-        collection_name=_COL,
-        points=Batch(ids=ids, vectors=vectors, payloads=payloads),#type: ignore
-        wait=True,
-    )
+        _qdrant.upsert(
+            collection_name=_COL,
+            points=Batch(ids=ids, vectors=vectors, payloads=payloads),#type: ignore
+            wait=True,
+        )
 
 def search_spans(doc_id: str, query: str, top_k: int = 5):
     ensure_collection()

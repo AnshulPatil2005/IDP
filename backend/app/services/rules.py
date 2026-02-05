@@ -230,6 +230,8 @@ def _load_yaml(path: str):
 
 def _load_rules_for(doc_id: str) -> Dict[str, Any]:
     base = f"/app_storage/{doc_id}"
+    if not os.path.exists(base):
+        return {"rules": []}
     # Prefer YAML, fallback to JSON, else empty spec
     spec = _load_yaml(os.path.join(base, "rules.yaml"))
     if spec is None:
@@ -238,6 +240,8 @@ def _load_rules_for(doc_id: str) -> Dict[str, Any]:
 
 def _load_clauses_for(doc_id: str) -> List[Dict[str, Any]]:
     base = f"/app_storage/{doc_id}"
+    if not os.path.exists(base):
+        return []
     clauses = _load_json(os.path.join(base, "clauses.json"))
     # Fallback to empty list if nothing found
     return clauses or []

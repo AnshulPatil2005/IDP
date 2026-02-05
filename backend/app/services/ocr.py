@@ -5,7 +5,7 @@ import io
 from typing import Dict, List
 from PIL import Image
 import numpy as np
-from doctr.io import DocumentFile
+import pypdfium2 as pdfium
 from doctr.models import ocr_predictor
 from .storage import put_json, put_bytes, get_bytes
 
@@ -23,11 +23,11 @@ def _get_predictor():
 
 def run(doc_id: str) -> Dict[str, bool]:
     """
-    OCR pipeline using docTR:
+    OCR pipeline using docTR and pypdfium2 for memory efficiency:
       1) Load PDF bytes from MinIO storage.
-      2) Use docTR to process PDF directly (no rasterization needed).
-      3) Extract text with bounding boxes from docTR output.
-      4) Build spans with char [start,end] and bbox.
+      2) Use pypdfium2 to iterate through pages one by one.
+      3) Render each page individually and run docTR predictor.
+      4) Extract text with bounding boxes from docTR output.
       5) Save page images and layout_index.json.
     Returns: {"layout_index": True}
     """
@@ -39,29 +39,31 @@ def run(doc_id: str) -> Dict[str, bool]:
         put_json(f"{doc_id}/layout_index.json", layout)
         return {"layout_index": True}
 
-    # docTR can process PDF directly from bytes
-    doc = DocumentFile.from_pdf(io.BytesIO(pdf_bytes))
-
-    # Run OCR prediction
+    # Use pypdfium2 to avoid loading all rasterized pages at once
+    pdf = pdfium.PdfDocument(io.BytesIO(pdf_bytes))
     predictor = _get_predictor()
-    result = predictor(doc)
 
     layout = {"pages": {}}
 
-    # Process each page
-    for page_idx, page in enumerate(result.pages, start=1):
-        # Get page dimensions (docTR works in normalized coordinates 0-1)
-        # We need to get the actual image to save it and get dimensions
-        page_img = doc[page_idx - 1]  # docTR doc is 0-indexed
+    # Process each page individually to save memory
+    for page_idx in range(len(pdf)):
+        page_num = page_idx + 1
+        page = pdf.get_page(page_idx)
+        # Render at 2x scale (approx 144 DPI) for good balance of OCR quality and memory
+        bitmap = page.render(scale=2)
+        page_img = bitmap.to_pil()
 
-        # Convert numpy array to PIL Image if needed
-        if isinstance(page_img, np.ndarray):
-            page_img = Image.fromarray((page_img * 255).astype(np.uint8) if page_img.max() <= 1 else page_img.astype(np.uint8))
+        # Convert to numpy array for docTR
+        page_np = np.array(page_img)
+
+        # Run OCR prediction on single page
+        result = predictor([page_np])
+        page_data = result.pages[0]
 
         # Save page image as JPEG
         buf = io.BytesIO()
         page_img.save(buf, format="JPEG", quality=85)
-        put_bytes(f"{doc_id}/pages/{page_idx}.jpg", buf.getvalue(), content_type="image/jpeg")
+        put_bytes(f"{doc_id}/pages/{page_num}.jpg", buf.getvalue(), content_type="image/jpeg")
 
         page_width = page_img.width
         page_height = page_img.height
@@ -70,7 +72,7 @@ def run(doc_id: str) -> Dict[str, bool]:
         cursor = 0  # character index within this page
 
         # Process blocks -> lines -> words
-        for block in page.blocks:
+        for block in page_data.blocks:
             for line in block.lines:
                 for word in line.words:
                     text = word.value.strip()
@@ -105,11 +107,16 @@ def run(doc_id: str) -> Dict[str, bool]:
                         "confidence": word.confidence,  # docTR provides confidence scores
                     })
 
-        layout["pages"][str(page_idx)] = {
+        layout["pages"][str(page_num)] = {
             "width": page_width,
             "height": page_height,
             "spans": page_spans,
         }
+
+        # Explicitly close to help GC
+        page.close()
+
+    pdf.close()
 
     put_json(f"{doc_id}/layout_index.json", layout)
     return {"layout_index": True}
