@@ -39,7 +39,8 @@ async def ingest(file: UploadFile = File(...), db: Session = Depends(db_dep)):
     # 1) Create a doc_id and object name
     doc_id = f"D{uuid.uuid4().hex[:8]}"
     _, ext = os.path.splitext(file.filename or "")
-    object_name = f"{doc_id}{ext or ''}"
+    # Ensure consistency with services (e.g., OCR) expecting original.pdf
+    object_name = f"{doc_id}/original{ext or ''}"
 
     # 2) Ensure bucket exists and upload (streaming, no full file in RAM)
     _ensure_bucket()
