@@ -1,109 +1,129 @@
-# backend/app/services/ocr.py
 from __future__ import annotations
 
 import io
-from typing import Dict, List
-from PIL import Image
-import numpy as np
-from doctr.io import DocumentFile
-from doctr.models import ocr_predictor
-from .storage import put_json, put_bytes, get_bytes
+import os
+from typing import Any, Dict, List, Tuple
 
-# Initialize docTR model (lazy load)
-_predictor = None
+from .storage import get_bytes, put_bytes, put_json
 
-def _get_predictor():
-    """Lazy load the OCR predictor model."""
-    global _predictor
-    if _predictor is None:
-        # Use pre-trained model: db_resnet50 for detection + crnn_vgg16_bn for recognition
-        # Set pretrained=True to download weights automatically
-        _predictor = ocr_predictor(det_arch='db_resnet50', reco_arch='crnn_vgg16_bn', pretrained=True)
-    return _predictor
+_predictor: Any = None
+_document_file_cls: Any = None
+_doctr_available = True
+
+
+def _fallback_layout(doc_id: str) -> Dict[str, bool]:
+    layout = {
+        "pages": {
+            "1": {
+                "width": 800,
+                "height": 1100,
+                "spans": [
+                    {
+                        "start": 0,
+                        "end": 36,
+                        "bbox": [40, 40, 720, 30],
+                        "text": "OCR unavailable; fallback layout generated.",
+                        "confidence": 0.5,
+                    }
+                ],
+            }
+        }
+    }
+    put_json(f"{doc_id}/layout_index.json", layout)
+    return {"layout_index": True}
+
+
+def _get_doctr() -> Tuple[Any, Any]:
+    global _predictor, _document_file_cls, _doctr_available
+    if _predictor is not None and _document_file_cls is not None:
+        return _predictor, _document_file_cls
+    if not _doctr_available:
+        raise RuntimeError("docTR is unavailable")
+    if os.getenv("OCR_BACKEND", "doctr").lower() == "stub":
+        raise RuntimeError("OCR backend configured to stub mode")
+
+    try:
+        import numpy as np
+        from PIL import Image
+        from doctr.io import DocumentFile
+        from doctr.models import ocr_predictor
+    except Exception as exc:  # pragma: no cover - dependency-sensitive
+        _doctr_available = False
+        raise RuntimeError(f"docTR import failed: {exc}") from exc
+
+    # keep symbols available to run()
+    _predictor = ocr_predictor(det_arch="db_resnet50", reco_arch="crnn_vgg16_bn", pretrained=True)
+    _document_file_cls = (DocumentFile, Image, np)
+    return _predictor, _document_file_cls
+
+
+def _fetch_pdf_bytes(doc_id: str) -> bytes | None:
+    return get_bytes(f"{doc_id}/original.pdf")
+
 
 def run(doc_id: str) -> Dict[str, bool]:
-    """
-    OCR pipeline using docTR:
-      1) Load PDF bytes from MinIO storage.
-      2) Use docTR to process PDF directly (no rasterization needed).
-      3) Extract text with bounding boxes from docTR output.
-      4) Build spans with char [start,end] and bbox.
-      5) Save page images and layout_index.json.
-    Returns: {"layout_index": True}
-    """
     pdf_bytes = _fetch_pdf_bytes(doc_id)
     if not pdf_bytes:
-        # Fallback: keep compatibility so the app has at least one span
-        layout = {"pages": {"1": {"width": 800, "height": 1100,
-                                  "spans": [{"start": 10, "end": 30, "bbox": [100, 200, 250, 40], "text": ""}]}}}
-        put_json(f"{doc_id}/layout_index.json", layout)
-        return {"layout_index": True}
+        return _fallback_layout(doc_id)
 
-    # docTR can process PDF directly from bytes
-    doc = DocumentFile.from_pdf(io.BytesIO(pdf_bytes))
+    try:
+        predictor, doctr_bundle = _get_doctr()
+        DocumentFile, Image, np = doctr_bundle
+    except Exception:
+        return _fallback_layout(doc_id)
 
-    # Run OCR prediction
-    predictor = _get_predictor()
-    result = predictor(doc)
+    try:
+        doc = DocumentFile.from_pdf(io.BytesIO(pdf_bytes))
+        result = predictor(doc)
+    except Exception:
+        return _fallback_layout(doc_id)
 
-    layout = {"pages": {}}
-
-    # Process each page
+    layout: Dict[str, Any] = {"pages": {}}
     for page_idx, page in enumerate(result.pages, start=1):
-        # Get page dimensions (docTR works in normalized coordinates 0-1)
-        # We need to get the actual image to save it and get dimensions
-        page_img = doc[page_idx - 1]  # docTR doc is 0-indexed
-
-        # Convert numpy array to PIL Image if needed
+        page_img = doc[page_idx - 1]
         if isinstance(page_img, np.ndarray):
-            page_img = Image.fromarray((page_img * 255).astype(np.uint8) if page_img.max() <= 1 else page_img.astype(np.uint8))
+            if page_img.max() <= 1:
+                page_img = Image.fromarray((page_img * 255).astype("uint8"))
+            else:
+                page_img = Image.fromarray(page_img.astype("uint8"))
 
-        # Save page image as JPEG
         buf = io.BytesIO()
         page_img.save(buf, format="JPEG", quality=85)
         put_bytes(f"{doc_id}/pages/{page_idx}.jpg", buf.getvalue(), content_type="image/jpeg")
 
         page_width = page_img.width
         page_height = page_img.height
+        page_spans: List[Dict[str, Any]] = []
+        cursor = 0
 
-        page_spans: List[Dict] = []
-        cursor = 0  # character index within this page
-
-        # Process blocks -> lines -> words
         for block in page.blocks:
             for line in block.lines:
                 for word in line.words:
-                    text = word.value.strip()
+                    text = (word.value or "").strip()
                     if not text:
                         continue
 
-                    # docTR provides normalized coordinates (0-1)
-                    # Format: ((x_min, y_min), (x_max, y_max))
-                    geometry = word.geometry
-                    x_min, y_min = geometry[0]
-                    x_max, y_max = geometry[1]
-
-                    # Convert to pixel coordinates
+                    ((x_min, y_min), (x_max, y_max)) = word.geometry
                     left = int(x_min * page_width)
                     top = int(y_min * page_height)
                     width = int((x_max - x_min) * page_width)
                     height = int((y_max - y_min) * page_height)
 
-                    # Add space before word if not first word
                     if page_spans:
                         cursor += 1
-
                     start = cursor
                     cursor += len(text)
                     end = cursor
 
-                    page_spans.append({
-                        "start": start,
-                        "end": end,
-                        "bbox": [left, top, width, height],  # x, y, w, h in pixels
-                        "text": text,
-                        "confidence": word.confidence,  # docTR provides confidence scores
-                    })
+                    page_spans.append(
+                        {
+                            "start": start,
+                            "end": end,
+                            "bbox": [left, top, width, height],
+                            "text": text,
+                            "confidence": float(getattr(word, "confidence", 0.0) or 0.0),
+                        }
+                    )
 
         layout["pages"][str(page_idx)] = {
             "width": page_width,
@@ -111,30 +131,8 @@ def run(doc_id: str) -> Dict[str, bool]:
             "spans": page_spans,
         }
 
+    if not layout["pages"]:
+        return _fallback_layout(doc_id)
+
     put_json(f"{doc_id}/layout_index.json", layout)
     return {"layout_index": True}
-
-
-# --- helpers ---------------------------------------------------------------
-
-def _fetch_pdf_bytes(doc_id: str) -> bytes | None:
-    """
-    Fetch PDF bytes from MinIO storage.
-    Falls back to local disk if storage fails.
-    """
-    # First try MinIO storage
-    pdf_bytes = get_bytes(f"{doc_id}/original.pdf")
-    if pdf_bytes:
-        return pdf_bytes
-
-    # Fallback: try local disk (for dev environment)
-    try:
-        import os
-        path = f"/app_storage/{doc_id}/original.pdf"
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                return f.read()
-    except Exception:
-        pass
-
-    return None

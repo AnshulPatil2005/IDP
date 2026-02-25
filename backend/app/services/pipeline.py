@@ -1,4 +1,7 @@
 # app/services/pipeline.py
+from __future__ import annotations
+
+import os
 from celery import chain
 from celery import shared_task  # use shared_task for robustness
 from .ocr import run as ocr_run
@@ -43,16 +46,33 @@ def task_summary(doc_id):
 def task_compose(doc_id):
     return compose_run(doc_id)
 
-def enqueue_ingestion(doc_id: str):
-    return chain(
-        task_ocr.si(doc_id),#type: ignore
-        task_tables.si(doc_id),#type: ignore
-        task_emb.si(doc_id),#type: ignore
-        task_clauses.si(doc_id),#type: ignore
-        task_deadlines.si(doc_id),#type: ignore
-        task_rules.si(doc_id),#type: ignore
-        task_summary.si(doc_id),#type: ignore
-        task_compose.si(doc_id),#type: ignore
-    ).apply_async()
 
-    return workflow.apply_async()
+def _run_sync(doc_id: str):
+    task_ocr(doc_id)
+    task_tables(doc_id)
+    task_emb(doc_id)
+    task_clauses(doc_id)
+    task_deadlines(doc_id)
+    task_rules(doc_id)
+    task_summary(doc_id)
+    task_compose(doc_id)
+    return {"doc_id": doc_id, "mode": "sync"}
+
+
+def enqueue_ingestion(doc_id: str):
+    if os.getenv("PIPELINE_MODE", "async").lower() == "sync":
+        return _run_sync(doc_id)
+
+    try:
+        return chain(
+            task_ocr.si(doc_id),  # type: ignore
+            task_tables.si(doc_id),  # type: ignore
+            task_emb.si(doc_id),  # type: ignore
+            task_clauses.si(doc_id),  # type: ignore
+            task_deadlines.si(doc_id),  # type: ignore
+            task_rules.si(doc_id),  # type: ignore
+            task_summary.si(doc_id),  # type: ignore
+            task_compose.si(doc_id),  # type: ignore
+        ).apply_async()
+    except Exception:
+        return _run_sync(doc_id)
